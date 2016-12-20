@@ -16,6 +16,7 @@ COLUMN_SQL = '''
 SELECT COLUMN_NAME,
     ORDINAL_POSITION,
     DATA_TYPE,
+    NUMERIC_SCALE,
     LENGTH
 FROM {schema}.SYSCOLUMNS
 WHERE TABLE_NAME = '{table}'
@@ -30,19 +31,14 @@ WHERE TABLE_SCHEMA = 'M3FDBPRD'
 PROPS = get_all_properties('properties.json')
 
 
-def get_metadata(table):
-    columns = get_columns(table)
-    logging.debug(columns)
-    keys = get_primary_keys(table)
-    logging.debug(keys)
-    tables = get_tables()
-    logging.debug(tables)
+def get_tables(schema, include='ALL'):
+    sql = TABLE_SQL.format(schema=schema)
+    if include != 'ALL':
+        sql = sql + "  AND TABLE_NAME IN ('" + "','".join(include) + "')"
 
-
-def get_tables(schema):
     connection = pypyodbc.connect(PROPS['connection_string'])
     cursor = connection.cursor()
-    cursor.execute(TABLE_SQL.format(schema=schema))
+    cursor.execute(sql)
     rows = cursor.fetchall()
     keys = []
     for row in rows:
@@ -62,8 +58,9 @@ def get_columns(schema, table):
     for row in rows:
         record = {'column_name': row[0],
                   'ordinal_position': row[1],
-                  'DATA_TYPE': row[2],
-                  'LENGTH': row[3]}
+                  'data_type': row[2],
+                  'numeric_scale': row[3],
+                  'length': row[4]}
         keys.append(record)
     cursor.close()
     connection.close()
@@ -83,7 +80,3 @@ def get_primary_keys(schema, table):
     connection.close()
 
     return keys
-
-
-if __name__ == '__main__':
-    get_metadata('MITTRA')
