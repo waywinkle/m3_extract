@@ -1,0 +1,129 @@
+<Biml xmlns="http://schemas.varigence.com/biml.xsd">
+	<Connections>
+		<OleDbConnection Name="m3_con" CreateInProject="true" ConnectionString="Provider=IBMDA400;Data Source=SMLM3BE1;User Id=BIEXTR;Default Collection=SMLM3BE1;" />
+		<OleDbConnection Name="dest_con" CreateInProject="true" ConnectionString="Data Source=SMLM3SQL2\SMLSQL2TEST;Initial Catalog=M3_extract_tst;Provider=SQLNCLI11.1;Integrated Security=SSPI;Auto Translate=False;" />
+	</Connections>
+	<Projects>
+		<PackageProject Name="m3_extract_biml_proto">
+			<Parameters>
+				<Parameter Name="m3_con_string" DataType="String">Provider=IBMDA400;Data Source=SMLM3BE1;User Id=BIEXTR;Default Collection=SMLM3BE1;</Parameter>
+				<Parameter Name="m3_con_password" DataType="String" IsSensitive="true">password01</Parameter>
+				<Parameter Name="dest_con_string" DataType="String">Data Source=SMLM3SQL2\SMLSQL2TEST;Initial Catalog=M3_extract_tst;Provider=SQLNCLI11.1;Integrated Security=SSPI;Auto Translate=False;</Parameter>
+				<Parameter Name="m3_schema" DataType="String">M3FDBTST</Parameter>
+				<Parameter Name="m3_extract_days" DataType="Int32">0</Parameter>
+			</Parameters>
+			<Packages>
+				<Package PackageName="MITMAS" />
+			</Packages>
+		</PackageProject>
+	</Projects>
+	<Packages>
+		<Package Name='MITMAS' ConstraintMode="Parallel" ProtectionLevel="EncryptSensitiveWithUserKey">
+			<Connections>
+				<#@ include file="con_common.biml"#>
+            </Connections>
+			<Variables>
+				<Variable Name="table" DataType="String">MITMAS</Variable>
+				<Variable Name="columns" DataType="String">MMCONO, MMSTAT, MMITNO, MMITDS</Variable>
+				<Variable Name="extract_filter_field" DataType="String">MMLMDT</Variable>
+				<Variable Name="update_from_stage" DataType="String">
+					UPDATE dest SET dest.MMITDS = upd.MMITDS,   dest.MMSTAT = upd.MMSTAT FROM extract.[MITMAS] dest INNER JOIN stage.[MITMAS_STAGE] upd  ON upd.MMCONO = dest.MMCONO  AND upd.MMITNO = DEST.MMITNO
+				</Variable>
+				<#@ include file="variables_common.biml"#>
+            </Variables>
+			<Tasks>
+				<ExecuteSQL Name="truncate_stage" ConnectionName="dest_con" >
+					<VariableInput VariableName="User.truncate_stage_sql" />
+					<#@ include file="create_audit.biml"#>
+				</ExecuteSQL>
+				<Dataflow Name="incremental_load">
+					<PrecedenceConstraints>
+						<Inputs>
+							<Input OutputPathName="truncate_stage.Output" />
+						</Inputs>
+					</PrecedenceConstraints>
+					<Transformations>
+						<OleDbSource Name="source_extract" ConnectionName="m3_con" ValidateExternalMetadata="false">
+							<VariableInput VariableName="User.extract_sql" />
+						</OleDbSource>
+						<RowCount Name="count_extract" VariableName="User.RcExtract">
+							<InputPath OutputPathName="source_extract.Output" />
+						</RowCount>
+						<DataConversion Name="DB2_to_SS_data_conversion">
+							<InputPath OutputPathName="count_extract.Output" />
+							<Columns>
+								<Column SourceColumn="MMCONO" TargetColumn="C_MMCONO" DataType="Int16" />
+								<Column SourceColumn="MMSTAT" TargetColumn="C_MMSTAT" DataType="StringFixedLength" Length="2" />
+								<Column SourceColumn="MMITNO" TargetColumn="C_MMITNO" DataType="StringFixedLength" Length="15" />
+								<Column SourceColumn="MMITDS" TargetColumn="C_MMITDS" DataType="StringFixedLength" Length="30" />
+							</Columns>
+						</DataConversion>
+						<Lookup Name="lookup_new_rows" OleDbConnectionName="dest_con" NoMatchBehavior="RedirectRowsToNoMatchOutput">
+							<InputPath OutputPathName="DB2_to_SS_data_conversion.Output" />
+							<DirectInput>
+								SELECT
+								MMCONO,
+								MMSTAT,
+								MMITNO,
+								MMITDS
+								FROM extract.MITMAS
+							</DirectInput>
+							<Inputs>
+								<Column SourceColumn="C_MMCONO" TargetColumn="MMCONO" />
+								<Column SourceColumn="C_MMITNO" TargetColumn="MMITNO" />
+							</Inputs>												  
+							<Outputs>												  
+								<Column SourceColumn="MMSTAT" TargetColumn="D_MMSTAT" />
+								<Column SourceColumn="MMITDS" TargetColumn="D_MMITDS" />
+							</Outputs>
+						</Lookup>
+						<ConditionalSplit Name="filter_updated_rows">
+							<InputPath OutputPathName="lookup_new_rows.Match" />
+							<OutputPaths>
+								<OutputPath Name="updated_rows">
+									<Expression>(C_MMSTAT != D_MMSTAT) || (C_MMITDS != D_MMITDS)</Expression>
+								</OutputPath>
+							</OutputPaths>
+						</ConditionalSplit>
+						<RowCount Name="count_updates" VariableName="User.RcUpdate">
+							<InputPath OutputPathName="filter_updated_rows.updated_rows" />
+						</RowCount>
+						<OleDbDestination Name="destination_updates" ConnectionName="dest_con">
+							<InputPath OutputPathName="count_updates.Output" />
+							<TableFromVariableOutput VariableName="User.table_stage" />
+							<Columns>
+								<Column SourceColumn="C_MMCONO" TargetColumn="MMCONO" />
+								<Column SourceColumn="C_MMSTAT" TargetColumn="MMSTAT" />
+								<Column SourceColumn="C_MMITNO" TargetColumn="MMITNO" />
+								<Column SourceColumn="C_MMITDS" TargetColumn="MMITDS" />
+							</Columns>
+						</OleDbDestination>
+						<RowCount Name="count_inserts" VariableName="User.RcInsert">
+							<InputPath OutputPathName="lookup_new_rows.NoMatch" />
+						</RowCount>
+						<OleDbDestination Name="destination_new" ConnectionName="dest_con">
+							<InputPath OutputPathName="count_inserts.Output" />
+							<TableFromVariableOutput VariableName="User.table_extract" />
+							<Columns>
+								<Column SourceColumn="C_MMCONO" TargetColumn="MMCONO" />
+								<Column SourceColumn="C_MMSTAT" TargetColumn="MMSTAT" />
+								<Column SourceColumn="C_MMITNO" TargetColumn="MMITNO" />
+								<Column SourceColumn="C_MMITDS" TargetColumn="MMITDS" />
+							</Columns>
+						</OleDbDestination>
+					</Transformations>
+					<#@ include file="udpate_audit.biml"#>
+				</Dataflow>
+				<ExecuteSQL Name="update_stage" ConnectionName="dest_con" >
+					<PrecedenceConstraints>
+						<Inputs>
+							<Input OutputPathName="incremental_load.Output" />
+						</Inputs>
+					</PrecedenceConstraints>
+					<VariableInput VariableName="User.update_from_stage" />
+				</ExecuteSQL>
+			</Tasks>
+			<#@ include file="error_audit.biml"#>
+		</Package>
+	</Packages>
+</Biml>
